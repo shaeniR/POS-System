@@ -1,6 +1,7 @@
 package com.pos.inventory.exception;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -27,8 +28,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
-        return error(HttpStatus.CONFLICT, "Duplicate Submission",
-                "The request conflicts with an existing record (e.g. a reused Idempotency-Key)");
+        return error(HttpStatus.CONFLICT, "Data Conflict",
+                "The request conflicts with existing data (e.g. a reused Idempotency-Key, or a product referenced by orders); no changes were saved");
+    }
+
+    /** Lock wait timeouts and deadlocks: the transaction was rolled back in full, so the client can safely retry. */
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, Object>> handleLockingFailure(PessimisticLockingFailureException ex) {
+        return error(HttpStatus.CONFLICT, "Concurrent Update",
+                "The resource is being modified by another request; no changes were saved, please retry");
     }
 
     @ExceptionHandler(ReservationExpiredException.class)

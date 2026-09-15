@@ -32,6 +32,13 @@ public class OrderController {
         return ResponseEntity.ok(orderService.getOrderByNumber(orderNumber));
     }
 
+    /** Cancels a RESERVED or PAID order, restoring its stock and refunding any successful payment. */
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<OrderResponse> cancelOrder(@PathVariable Long id) {
+        orderService.cancelOrder(id);
+        return ResponseEntity.ok(orderService.getOrderById(id));
+    }
+
     @GetMapping
     public ResponseEntity<List<OrderResponse>> getAllOrders() {
         return ResponseEntity.ok(orderService.getAllOrders());

@@ -7,12 +7,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.util.UUID;
 
-/**
- * Simulated external payment gateway.
- * <p>
- * SUCCESS and FAILURE respond after a short network latency. TIMEOUT hangs for longer than the caller's
- * timeout, so the timeout is detected by the caller exactly as it would be with a real, unresponsive gateway.
- */
+
 @Component
 @Slf4j
 public class MockPaymentGateway {

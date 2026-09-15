@@ -6,6 +6,7 @@ import com.pos.inventory.exception.DuplicateSubmissionException;
 import com.pos.inventory.exception.InsufficientStockException;
 import com.pos.inventory.exception.ResourceNotFoundException;
 import com.pos.inventory.model.*;
+import com.pos.inventory.payment.MockPaymentGateway;
 import com.pos.inventory.repository.CartRepository;
 import com.pos.inventory.repository.OrderRepository;
 import com.pos.inventory.repository.ProductRepository;
@@ -30,6 +31,8 @@ public class OrderService {
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
     private final ReservationService reservationService;
+    private final OrderCancellationService orderCancellationService;
+    private final MockPaymentGateway paymentGateway;
 
     /**
      * Converts a Cart into an Order under a strict database transaction with Pessimistic Locking.
@@ -63,7 +66,7 @@ public class OrderService {
         Order order = Order.builder()
                 .orderNumber("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
                 .cartId(cartId)
-                .status(OrderStatus.RESERVED)
+                .status(OrderStatus.PENDING)
                 .createdAt(LocalDateTime.now())
                 .expiresAt(reservationService.newExpiryTime())
                 .totalAmount(BigDecimal.ZERO)
@@ -105,6 +108,8 @@ public class OrderService {
 
         order.setTotalAmount(totalAmount);
         order.setItems(orderItems);
+        // All items deducted; if any deduction had failed, the exception above rolls back every change in this transaction
+        order.transitionTo(OrderStatus.RESERVED);
         Order savedOrder = orderRepository.save(order);
 
         // Clear cart upon successful order reservation
@@ -115,6 +120,15 @@ public class OrderService {
                 savedOrder.getOrderNumber(), savedOrder.getExpiresAt());
 
         return mapToOrderResponse(savedOrder);
+    }
+
+    /**
+     * Cancels a RESERVED or PAID order, restoring its stock. Payments are refunded at the gateway only after
+     * the cancellation has committed, so a database failure never results in a refund for an uncancelled order.
+     */
+    public void cancelOrder(Long orderId) {
+        List<String> transactionIdsToRefund = orderCancellationService.cancel(orderId);
+        transactionIdsToRefund.forEach(paymentGateway::refund);
     }
 
     // READ_COMMITTED so the order is re-read after expireReservationIfDue commits in its own transaction
@@ -180,6 +194,7 @@ public class OrderService {
                 .createdAt(order.getCreatedAt())
                 .expiresAt(order.getExpiresAt())
                 .reservationSecondsRemaining(secondsUntilExpiry(order))
+                .allowedTransitions(order.getStatus().allowedTransitions())
                 .items(itemResponses)
                 .build();
     }

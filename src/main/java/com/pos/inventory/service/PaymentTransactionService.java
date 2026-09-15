@@ -10,6 +10,7 @@ import com.pos.inventory.model.OrderStatus;
 import com.pos.inventory.model.Payment;
 import com.pos.inventory.model.PaymentStatus;
 import com.pos.inventory.payment.GatewayResult;
+import com.pos.inventory.payment.PaymentOutcome;
 import com.pos.inventory.repository.OrderRepository;
 import com.pos.inventory.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
@@ -19,10 +20,12 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * The two short database transactions around a gateway call. Both lock the order row, so all payment
- * attempts and reservation expiry for one order are serialized. No lock is held while the gateway is called.
+ * attempts, cancellation and reservation expiry for one order are serialized. No lock is held while the
+ * gateway is called.
  */
 @Service
 @RequiredArgsConstructor
@@ -32,6 +35,7 @@ public class PaymentTransactionService {
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
     private final ReservationService reservationService;
+    private final OrderLifecycleService orderLifecycleService;
 
     /**
      * Validates that the order can be paid and records a PROCESSING payment.
@@ -63,16 +67,16 @@ public class PaymentTransactionService {
                     "Order " + order.getOrderNumber() + " cannot be paid in status " + order.getStatus());
         }
 
-        if (reservationService.isReservationExpired(order, LocalDateTime.now())) {
-            // Release now rather than waiting for the scheduler; noRollbackFor keeps this change committed
-            reservationService.releaseReservedStock(order, OrderStatus.EXPIRED);
-            throw new ReservationExpiredException("Reservation for order " + order.getOrderNumber() +
-                    " expired at " + order.getExpiresAt() + "; please checkout again");
-        }
-
         if (reservationService.hasPaymentInFlight(orderId)) {
             throw new DuplicateSubmissionException(
                     "Duplicate payment: a payment for order " + order.getOrderNumber() + " is already in progress");
+        }
+
+        if (reservationService.isReservationExpired(order, LocalDateTime.now())) {
+            // Release now rather than waiting for the scheduler; noRollbackFor keeps this change committed
+            reservationService.expire(order);
+            throw new ReservationExpiredException("Reservation for order " + order.getOrderNumber() +
+                    " expired at " + order.getExpiresAt() + "; please checkout again");
         }
 
         return paymentRepository.save(Payment.builder()
@@ -88,8 +92,9 @@ public class PaymentTransactionService {
      * SUCCESS confirms the order (PAID), FAILURE marks it FAILED and releases stock,
      * TIMEOUT expires the reservation and releases stock.
      * <p>
-     * If the order is no longer RESERVED (e.g. it expired while a stale payment was in flight), stock is not
-     * released twice, and an approved charge is marked REFUNDED so the caller can refund it.
+     * If the order was already resolved without this payment (e.g. the payment was abandoned and the reservation
+     * expired), the order and stock are left untouched, and an approved charge is marked REFUNDED so the caller
+     * can refund it.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public PaymentResponse completePayment(Long orderId, Long paymentId, GatewayResult result) {
@@ -98,38 +103,36 @@ public class PaymentTransactionService {
         Payment payment = paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with id: " + paymentId));
 
-        boolean reserved = order.getStatus() == OrderStatus.RESERVED;
+        boolean paymentStillDecidesOrder = payment.getStatus() == PaymentStatus.PROCESSING
+                && order.getStatus() == OrderStatus.RESERVED;
+
+        if (!paymentStillDecidesOrder) {
+            if (result.outcome() == PaymentOutcome.SUCCESS) {
+                payment.setStatus(PaymentStatus.REFUNDED);
+                payment.setTransactionId(result.transactionId());
+                payment.setMessage("Order was " + order.getStatus() + " when payment was approved; charge refunded");
+            } else if (payment.getStatus() == PaymentStatus.PROCESSING) {
+                payment.setStatus(paymentStatusFor(result.outcome()));
+                payment.setMessage(result.message());
+            }
+            payment.setCompletedAt(LocalDateTime.now());
+            paymentRepository.saveAndFlush(payment);
+            log.warn("Payment {} completed after order {} was already {}; order left unchanged",
+                    paymentId, order.getOrderNumber(), order.getStatus());
+            return toResponse(payment, order);
+        }
+
+        payment.setStatus(paymentStatusFor(result.outcome()));
         payment.setTransactionId(result.transactionId());
         payment.setMessage(result.message());
         payment.setCompletedAt(LocalDateTime.now());
+        paymentRepository.saveAndFlush(payment);
 
-        switch (result.outcome()) {
-            case SUCCESS -> {
-                if (reserved) {
-                    payment.setStatus(PaymentStatus.SUCCESS);
-                    order.setStatus(OrderStatus.PAID);
-                } else {
-                    payment.setStatus(PaymentStatus.REFUNDED);
-                    payment.setMessage("Order was " + order.getStatus() + " when payment was approved; charge refunded");
-                }
-                paymentRepository.saveAndFlush(payment);
-                orderRepository.saveAndFlush(order);
-            }
-            case FAILURE -> {
-                payment.setStatus(PaymentStatus.FAILED);
-                paymentRepository.saveAndFlush(payment);
-                if (reserved) {
-                    reservationService.releaseReservedStock(order, OrderStatus.FAILED);
-                }
-            }
-            case TIMEOUT -> {
-                payment.setStatus(PaymentStatus.TIMEOUT);
-                paymentRepository.saveAndFlush(payment);
-                if (reserved) {
-                    reservationService.releaseReservedStock(order, OrderStatus.EXPIRED);
-                }
-            }
-        }
+        orderLifecycleService.transition(order, switch (result.outcome()) {
+            case SUCCESS -> OrderStatus.PAID;
+            case FAILURE -> OrderStatus.FAILED;
+            case TIMEOUT -> OrderStatus.EXPIRED;
+        });
 
         log.info("Payment {} for order {} completed: payment={}, order={}",
                 payment.getId(), order.getOrderNumber(), payment.getStatus(), order.getStatus());
@@ -137,12 +140,20 @@ public class PaymentTransactionService {
     }
 
     @Transactional(readOnly = true)
-    public java.util.List<PaymentResponse> getPaymentsForOrder(Long orderId) {
+    public List<PaymentResponse> getPaymentsForOrder(Long orderId) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + orderId));
         return paymentRepository.findByOrderIdOrderByCreatedAtAsc(orderId).stream()
                 .map(payment -> toResponse(payment, order))
                 .toList();
+    }
+
+    private PaymentStatus paymentStatusFor(PaymentOutcome outcome) {
+        return switch (outcome) {
+            case SUCCESS -> PaymentStatus.SUCCESS;
+            case FAILURE -> PaymentStatus.FAILED;
+            case TIMEOUT -> PaymentStatus.TIMEOUT;
+        };
     }
 
     private PaymentResponse toResponse(Payment payment, Order order) {

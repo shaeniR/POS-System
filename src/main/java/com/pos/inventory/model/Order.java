@@ -1,5 +1,6 @@
 package com.pos.inventory.model;
 
+import com.pos.inventory.exception.InvalidOrderStateException;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -31,8 +32,10 @@ public class Order {
     @Column(nullable = false)
     private BigDecimal totalAmount;
 
+    /** Set on creation via the builder; afterwards changed only through {@link #transitionTo}. */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
+    @Setter(AccessLevel.NONE)
     private OrderStatus status;
 
     @Builder.Default
@@ -43,6 +46,21 @@ public class Order {
     private LocalDateTime createdAt;
 
     private LocalDateTime expiresAt;
+
+    /**
+     * Changes the status, enforcing the lifecycle defined in {@link OrderStatus}.
+     * Stock side effects are applied by {@code OrderLifecycleService}, which should be used instead of calling this directly
+     * on persisted orders.
+     *
+     * @throws InvalidOrderStateException if the transition is not allowed
+     */
+    public void transitionTo(OrderStatus target) {
+        if (!status.canTransitionTo(target)) {
+            throw new InvalidOrderStateException("Order " + orderNumber + " cannot move from " + status + " to " + target +
+                    (status.isTerminal() ? " (" + status + " is a final status)" : "; allowed: " + status.allowedTransitions()));
+        }
+        this.status = target;
+    }
 
     @PrePersist
     public void prePersist() {

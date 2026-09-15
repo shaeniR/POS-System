@@ -27,6 +27,29 @@ Duplicate detection (all return `409 Conflict`):
 
 Paying an expired reservation returns `410 Gone` (and releases its stock immediately); paying a `FAILED`/`CANCELLED` order returns `409`.
 
+## Order Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> RESERVED : stock deducted at checkout
+    PENDING --> FAILED
+    PENDING --> CANCELLED
+    RESERVED --> PAID : payment success
+    RESERVED --> FAILED : payment declined
+    RESERVED --> EXPIRED : 5 min elapsed / gateway timeout
+    RESERVED --> CANCELLED : user cancels
+    PAID --> CANCELLED : user cancels (refund)
+    FAILED --> [*]
+    EXPIRED --> [*]
+    CANCELLED --> [*]
+```
+
+- **Transitions are enforced** — allowed transitions are defined once in `OrderStatus`; `Order.status` has no setter and changes only through `Order.transitionTo`, which throws `InvalidOrderStateException` (409) for anything else. Order responses include `allowedTransitions`.
+- **Stock follows status** — only `RESERVED` and `PAID` hold stock. `OrderLifecycleService.transition` restores an order's quantities whenever it moves from a stock-holding status to `CANCELLED`, `EXPIRED` or `FAILED`, in the same transaction as the status change. Final statuses allow no further transitions, so stock is never restored twice.
+- **Cancellation** — `POST /api/orders/{id}/cancel` cancels a `RESERVED` or `PAID` order, restoring stock and marking successful payments `REFUNDED`. The gateway refund is issued only after the cancellation commits. Cancelling a final order, or one with a payment in progress, returns 409.
+- **Consistency under failure** — every state change runs in a single transaction under a row lock on the order: a checkout that fails part-way rolls back all deductions and leaves the cart intact; lock timeouts/deadlocks are rolled back and returned as 409 so clients can retry; abandoned `PROCESSING` payments are closed as `TIMEOUT` when their order is finalized.
+
 ## Configuration (`application.properties`)
 
 | Property | Default | Meaning |
