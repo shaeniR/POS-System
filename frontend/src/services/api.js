@@ -12,8 +12,8 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  // A simulated gateway TIMEOUT takes a few seconds on the server, so allow comfortably more than that
-  timeout: 30000,
+  // Allow for a simulated gateway TIMEOUT and for free-tier hosting waking up from sleep (can take about a minute)
+  timeout: 90000,
 });
 
 export default api;
