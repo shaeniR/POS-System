@@ -1,0 +1,12 @@
+# Only pom.xml and src/ are needed to build the backend image
+frontend/
+target/
+.git/
+.idea/
+.vscode/
+*.log
+
+# Never bake secrets into an image
+secrets.properties
+.env
+.env.*
