@@ -1,5 +1,14 @@
 # POS-System
 
+Spring Boot + MySQL backend (this folder) with a simple React frontend in [`frontend/`](frontend/README.md).
+
+## Running locally
+
+1. Backend (port 8081): `mvn spring-boot:run`
+2. Frontend (port 5173): `cd frontend && npm install && npm run dev`, then open http://localhost:5173
+
+The frontend has three tabs: **Products** (CRUD + live available/reserved stock), **Cart & Checkout**, and **Orders** (reservation countdown, simulated payment outcomes, duplicate-payment demo, cancellation).
+
 ## Stock Reservation
 
 - **Reserve on checkout** — `POST /api/orders/checkout/{cartId}` atomically deducts stock (products locked in ascending ID order) and creates an order in `RESERVED` status with `expiresAt = now + 5 minutes`. The response includes `reservationSecondsRemaining`.
