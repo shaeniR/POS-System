@@ -22,6 +22,8 @@ public class OrderResponse {
     private BigDecimal totalAmount;
     private LocalDateTime createdAt;
     private LocalDateTime expiresAt;
+    /** Seconds left before the stock reservation expires; null unless the order is RESERVED. */
+    private Long reservationSecondsRemaining;
     @Builder.Default
     private List<OrderItemResponse> items = new ArrayList<>();
 }

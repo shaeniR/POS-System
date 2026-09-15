@@ -1,5 +1,6 @@
 package com.pos.inventory.controller;
 
+import com.pos.inventory.dto.ProductStockResponse;
 import com.pos.inventory.model.Product;
 import com.pos.inventory.service.ProductService;
 import jakarta.validation.Valid;
@@ -26,6 +27,11 @@ public class ProductController {
     @GetMapping
     public ResponseEntity<List<Product>> getAllProducts() {
         return ResponseEntity.ok(productService.getAllProducts());
+    }
+
+    @GetMapping("/stock")
+    public ResponseEntity<List<ProductStockResponse>> getStockOverview() {
+        return ResponseEntity.ok(productService.getStockOverview());
     }
 
     @GetMapping("/{id}")

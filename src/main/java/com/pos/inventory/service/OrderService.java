@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -27,6 +28,7 @@ public class OrderService {
     private final CartRepository cartRepository;
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
+    private final ReservationService reservationService;
 
     /**
      * Converts a Cart into an Order under a strict database transaction with Pessimistic Locking.
@@ -52,7 +54,7 @@ public class OrderService {
                 .orderNumber("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
                 .status(OrderStatus.RESERVED)
                 .createdAt(LocalDateTime.now())
-                .expiresAt(LocalDateTime.now().plusMinutes(5))
+                .expiresAt(reservationService.newExpiryTime())
                 .totalAmount(BigDecimal.ZERO)
                 .build();
 
@@ -104,18 +106,33 @@ public class OrderService {
         return mapToOrderResponse(savedOrder);
     }
 
-    @Transactional(readOnly = true)
+    // READ_COMMITTED so the order is re-read after expireReservationIfDue commits in its own transaction
+    @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
     public OrderResponse getOrderById(Long id) {
+        expireReservationIfDue(id);
         Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + id));
         return mapToOrderResponse(order);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
     public OrderResponse getOrderByNumber(String orderNumber) {
-        Order order = orderRepository.findByOrderNumber(orderNumber)
+        Long id = orderRepository.findIdByOrderNumber(orderNumber)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found with number: " + orderNumber));
+        expireReservationIfDue(id);
+        Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found with number: " + orderNumber));
         return mapToOrderResponse(order);
+    }
+
+    /**
+     * Releases a reservation the moment its expiry is observed, so a client never sees a stale RESERVED
+     * order between scheduler runs. Runs before the order entity is loaded into this transaction.
+     */
+    private void expireReservationIfDue(Long orderId) {
+        if (orderRepository.existsByIdAndStatusAndExpiresAtLessThanEqual(orderId, OrderStatus.RESERVED, LocalDateTime.now())) {
+            reservationService.expireReservation(orderId);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -123,6 +140,13 @@ public class OrderService {
         return orderRepository.findAll().stream()
                 .map(this::mapToOrderResponse)
                 .collect(Collectors.toList());
+    }
+
+    private Long secondsUntilExpiry(Order order) {
+        if (order.getStatus() != OrderStatus.RESERVED || order.getExpiresAt() == null) {
+            return null;
+        }
+        return Math.max(0, Duration.between(LocalDateTime.now(), order.getExpiresAt()).getSeconds());
     }
 
     public OrderResponse mapToOrderResponse(Order order) {
@@ -144,6 +168,7 @@ public class OrderService {
                 .totalAmount(order.getTotalAmount())
                 .createdAt(order.getCreatedAt())
                 .expiresAt(order.getExpiresAt())
+                .reservationSecondsRemaining(secondsUntilExpiry(order))
                 .items(itemResponses)
                 .build();
     }
