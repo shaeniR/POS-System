@@ -24,6 +24,10 @@ public class Order {
     @Column(nullable = false, unique = true, length = 64)
     private String orderNumber;
 
+    /** Cart this order was created from; used to detect duplicate checkout submissions. */
+    @Column(length = 64)
+    private String cartId;
+
     @Column(nullable = false)
     private BigDecimal totalAmount;
 

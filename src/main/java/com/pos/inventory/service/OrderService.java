@@ -2,6 +2,7 @@ package com.pos.inventory.service;
 
 import com.pos.inventory.dto.OrderItemResponse;
 import com.pos.inventory.dto.OrderResponse;
+import com.pos.inventory.exception.DuplicateSubmissionException;
 import com.pos.inventory.exception.InsufficientStockException;
 import com.pos.inventory.exception.ResourceNotFoundException;
 import com.pos.inventory.model.*;
@@ -33,13 +34,22 @@ public class OrderService {
     /**
      * Converts a Cart into an Order under a strict database transaction with Pessimistic Locking.
      * Prevents race conditions, overselling, and deadlocks by locking products in deterministic ID order.
+     * The cart row is locked first, so a duplicate submission of the same cart waits for the first one and
+     * is then rejected instead of creating a second order.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public OrderResponse checkoutCart(String cartId) {
-        Cart cart = cartRepository.findById(cartId)
+        Cart cart = cartRepository.findByIdForUpdate(cartId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cart not found with id: " + cartId));
 
         if (cart.getItems().isEmpty()) {
+            orderRepository.findFirstByCartIdAndStatusInOrderByCreatedAtDesc(
+                            cartId, List.of(OrderStatus.RESERVED, OrderStatus.PAID))
+                    .ifPresent(existing -> {
+                        throw new DuplicateSubmissionException("Duplicate order: cart " + cartId +
+                                " was already checked out as order " + existing.getOrderNumber() +
+                                " (" + existing.getStatus() + ")");
+                    });
             throw new IllegalStateException("Cannot checkout an empty cart");
         }
 
@@ -52,6 +62,7 @@ public class OrderService {
 
         Order order = Order.builder()
                 .orderNumber("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
+                .cartId(cartId)
                 .status(OrderStatus.RESERVED)
                 .createdAt(LocalDateTime.now())
                 .expiresAt(reservationService.newExpiryTime())

@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +28,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.expiresAt <= :now ORDER BY o.expiresAt")
     List<Long> findIdsByStatusExpiredBy(@Param("status") OrderStatus status, @Param("now") LocalDateTime now);
+
+    Optional<Order> findFirstByCartIdAndStatusInOrderByCreatedAtDesc(String cartId, Collection<OrderStatus> statuses);
 
     boolean existsByIdAndStatusAndExpiresAtLessThanEqual(Long id, OrderStatus status, LocalDateTime now);
 }

@@ -1,5 +1,6 @@
 package com.pos.inventory.exception;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -16,32 +17,38 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InsufficientStockException.class)
     public ResponseEntity<Map<String, Object>> handleInsufficientStock(InsufficientStockException ex) {
-        Map<String, Object> errorDetails = new HashMap<>();
-        errorDetails.put("timestamp", LocalDateTime.now());
-        errorDetails.put("status", HttpStatus.CONFLICT.value());
-        errorDetails.put("error", "Insufficient Stock");
-        errorDetails.put("message", ex.getMessage());
-        return new ResponseEntity<>(errorDetails, HttpStatus.CONFLICT);
+        return error(HttpStatus.CONFLICT, "Insufficient Stock", ex.getMessage());
+    }
+
+    @ExceptionHandler(DuplicateSubmissionException.class)
+    public ResponseEntity<Map<String, Object>> handleDuplicateSubmission(DuplicateSubmissionException ex) {
+        return error(HttpStatus.CONFLICT, "Duplicate Submission", ex.getMessage());
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        return error(HttpStatus.CONFLICT, "Duplicate Submission",
+                "The request conflicts with an existing record (e.g. a reused Idempotency-Key)");
+    }
+
+    @ExceptionHandler(ReservationExpiredException.class)
+    public ResponseEntity<Map<String, Object>> handleReservationExpired(ReservationExpiredException ex) {
+        return error(HttpStatus.GONE, "Reservation Expired", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidOrderStateException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidOrderState(InvalidOrderStateException ex) {
+        return error(HttpStatus.CONFLICT, "Invalid Order State", ex.getMessage());
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<Map<String, Object>> handleResourceNotFound(ResourceNotFoundException ex) {
-        Map<String, Object> errorDetails = new HashMap<>();
-        errorDetails.put("timestamp", LocalDateTime.now());
-        errorDetails.put("status", HttpStatus.NOT_FOUND.value());
-        errorDetails.put("error", "Not Found");
-        errorDetails.put("message", ex.getMessage());
-        return new ResponseEntity<>(errorDetails, HttpStatus.NOT_FOUND);
+        return error(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage());
     }
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
-        Map<String, Object> errorDetails = new HashMap<>();
-        errorDetails.put("timestamp", LocalDateTime.now());
-        errorDetails.put("status", HttpStatus.BAD_REQUEST.value());
-        errorDetails.put("error", "Bad Request");
-        errorDetails.put("message", ex.getMessage());
-        return new ResponseEntity<>(errorDetails, HttpStatus.BAD_REQUEST);
+        return error(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -62,11 +69,15 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGenericException(Exception ex) {
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error", ex.getMessage());
+    }
+
+    private ResponseEntity<Map<String, Object>> error(HttpStatus status, String error, String message) {
         Map<String, Object> errorDetails = new HashMap<>();
         errorDetails.put("timestamp", LocalDateTime.now());
-        errorDetails.put("status", HttpStatus.INTERNAL_SERVER_ERROR.value());
-        errorDetails.put("error", "Internal Server Error");
-        errorDetails.put("message", ex.getMessage());
-        return new ResponseEntity<>(errorDetails, HttpStatus.INTERNAL_SERVER_ERROR);
+        errorDetails.put("status", status.value());
+        errorDetails.put("error", error);
+        errorDetails.put("message", message);
+        return new ResponseEntity<>(errorDetails, status);
     }
 }

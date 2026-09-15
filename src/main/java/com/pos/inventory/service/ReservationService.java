@@ -3,7 +3,9 @@ package com.pos.inventory.service;
 import com.pos.inventory.model.Order;
 import com.pos.inventory.model.OrderItem;
 import com.pos.inventory.model.OrderStatus;
+import com.pos.inventory.model.PaymentStatus;
 import com.pos.inventory.repository.OrderRepository;
+import com.pos.inventory.repository.PaymentRepository;
 import com.pos.inventory.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,9 +38,16 @@ public class ReservationService {
 
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
+    private final PaymentRepository paymentRepository;
+
+    /** A PROCESSING payment older than the gateway timeout plus this margin is treated as abandoned. */
+    private static final long PAYMENT_IN_FLIGHT_GRACE_MS = 30_000;
 
     @Value("${pos.reservation.ttl-minutes:5}")
     private long reservationTtlMinutes;
+
+    @Value("${pos.payment.gateway-timeout-ms:3000}")
+    private long gatewayTimeoutMs;
 
     /** Expiry timestamp for a reservation created now. */
     public LocalDateTime newExpiryTime() {
@@ -62,10 +71,21 @@ public class ReservationService {
         if (order == null || !isReservationExpired(order, LocalDateTime.now())) {
             return false;
         }
+        if (hasPaymentInFlight(orderId)) {
+            // Let the in-flight payment decide the order's outcome; retried on the next scheduler run
+            log.info("Reservation for order {} is overdue but a payment is in progress; deferring expiry", order.getOrderNumber());
+            return false;
+        }
 
         releaseReservedStock(order, OrderStatus.EXPIRED);
         log.info("Reservation for order {} expired at {}; stock released", order.getOrderNumber(), order.getExpiresAt());
         return true;
+    }
+
+    /** Whether a payment for this order has been sent to the gateway and could still complete. */
+    public boolean hasPaymentInFlight(Long orderId) {
+        LocalDateTime inFlightSince = LocalDateTime.now().minusNanos((gatewayTimeoutMs + PAYMENT_IN_FLIGHT_GRACE_MS) * 1_000_000);
+        return paymentRepository.existsByOrderIdAndStatusAndCreatedAtAfter(orderId, PaymentStatus.PROCESSING, inFlightSince);
     }
 
     public boolean isReservationExpired(Order order, LocalDateTime now) {
