@@ -28,6 +28,12 @@ target/
 ### VS Code ###
 .vscode/
 
+### Secrets (never commit) ###
+secrets.properties
+.env
+.env.*
+!.env.example
+
 ### Logs & OS ###
 *.log
 .DS_Store
